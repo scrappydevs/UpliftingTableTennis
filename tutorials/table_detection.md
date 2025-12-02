@@ -6,8 +6,9 @@ In this tutorial, you will learn how to detect table tennis table keypoints (cor
 First, ensure you have the required dependencies installed. You can install them via pip:
 
 ```bash
-pip install torch torchvision numpy opencv-python einops tqdm matplotlib scipy scikit-learn omegaconf tomesd
+pip install torch torchvision numpy opencv-python-headless einops tqdm matplotlib scipy scikit-learn omegaconf tomesd
 ```
+Note: You can also use the standard `opencv-python` package.
 
 ## 2. Setup and Data Loading
 We use torch.hub to easily download the example images provided in the repository and load them into memory. 
@@ -20,7 +21,7 @@ import os
 import matplotlib.pyplot as plt
 
 # Define the repository (replace with your actual repo path if different)
-repo = 'kiedani/WACV2026' 
+repo = 'KieDani/UpliftingTableTennis' 
 
 # 1. Download example images using the helper function defined in hubconf.py
 image_folder = torch.hub.load(repo, 'download_example_images', local_folder='example_images', trust_repo=True)
