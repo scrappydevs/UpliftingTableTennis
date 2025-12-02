@@ -6,6 +6,10 @@ We are happy to announce that our paper "Uplifting Table Tennis: A Robust, Real-
 
 
 
+https://github.com/user-attachments/assets/58717aed-dc5f-4193-b269-40102e0f81a2
+
+
+
 # Installation
 
 ### Inference Only
