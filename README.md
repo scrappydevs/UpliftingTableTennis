@@ -10,16 +10,6 @@ https://github.com/user-attachments/assets/58717aed-dc5f-4193-b269-40102e0f81a2
 
 
 
-# Installation
-
-### Inference Only
-Use this installation if you only want to use our final models, but do not plan to simulate the synthetic dataset or do some ablation studies.
-Tested with python version 3.12.4.
-```
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --extra-index-url https://download.pytorch.org/whl/cu124
-pip install -r requirements.txt
-```
-
 # Easy usage of our models
 In this section, we explain how to load our trained models via torch.hub.
 You can either load our full pipeline, or use the individual models separately.
@@ -30,6 +20,15 @@ If you simply want to use our ball detection models, you can find a tutorial [he
 ### Table Keypoint Detection and Camera Calibration
 If you are interested in detecting the table keypoints and calibrating the camera, you can find a tutorial [here](tutorials/table_detection.md).
 
+# Installation
+
+### Inference Only
+Use this installation if you only want to use our final models, but do not plan to simulate the synthetic dataset or do some ablation studies.
+Tested with python version 3.12.4.
+```
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --extra-index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
+```
 
 ### Full Installation
 Use this installation if you want to do everything, including training, testing and data simulation.
