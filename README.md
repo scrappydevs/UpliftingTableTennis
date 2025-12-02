@@ -20,6 +20,16 @@ pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --extra-index-url
 pip install -r requirements.txt
 ```
 
+# Easy usage of our models
+In this section, we explain how to load our trained models via torch.hub.
+You can either load our full pipeline, or use the individual models separately.
+### Full Pipeline
+You find a tutorial on how to use the full pipeline easily via torch.hub [here](tutorials/full_pipeline.md).
+### Ball Detection
+If you simply want to use our ball detection models, you can find a tutorial [here](tutorials/ball_detection.md).
+### Table Keypoint Detection and Camera Calibration
+If you are interested in detecting the table keypoints and calibrating the camera, you can find a tutorial [here](tutorials/table_detection.md).
+
 
 ### Full Installation
 Use this installation if you want to do everything, including training, testing and data simulation.
@@ -37,16 +47,6 @@ pip install -r requirements_full.txt
 
 pip install mmcv==2.2.0
 ```
-
-# Easy usage of our models
-In this section, we explain how to load our trained models via torch.hub.
-You can either load our full pipeline, or use the individual models separately.
-### Full Pipeline
-You find a tutorial on how to use the full pipeline easily via torch.hub [here](tutorials/full_pipeline.md).
-### Ball Detection
-If you simply want to use our ball detection models, you can find a tutorial [here](tutorials/ball_detection.md).
-### Table Keypoint Detection and Camera Calibration
-If you are interested in detecting the table keypoints and calibrating the camera, you can find a tutorial [here](tutorials/table_detection.md).
 
 
 # Reproduce Results
