@@ -40,7 +40,7 @@ def load_model(model_path):
         transform (callable): Transformation function for input images.
         transform_mode (str): Spin transformation mode used during training ('global' or 'local').
     '''
-    loaded_dict = torch.load(model_path, weights_only=False)
+    loaded_dict = torch.load(model_path, weights_only=False, map_location=torch.device('cpu'))
     model_name = loaded_dict['additional_info']['name']
     model_size = loaded_dict['additional_info']['size']
     identifier = loaded_dict['identifier']

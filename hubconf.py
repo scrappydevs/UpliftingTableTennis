@@ -4,7 +4,7 @@ import torch
 import os
 from interface import BallDetector, TableDetector, TableTennisPipeline, _get_weights_path
 
-REPO_BASE_URL = "https://github.com/KieDani/UpliftingTableTennis/tree/main/"
+REPO_BASE_URL = "https://github.com/KieDani/UpliftingTableTennis/raw/main/"
 
 def ball_detection(model_name='segformerpp_b2', **kwargs):
     """
@@ -36,7 +36,6 @@ def download_example_images(local_folder='example_images'):
     os.makedirs(local_folder, exist_ok=True)
     print(f"Downloading example images to '{local_folder}'...")
 
-    base_url = f"https://github.com/KieDani/UpliftingTableTennis/raw/main/tutorials/example_imgs/"
     # We assume the tutorial has 35 images named 00.png to 34.png
     for i in range(35):
         filename = f"{i:02d}.png"
