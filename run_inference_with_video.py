@@ -115,12 +115,13 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend
 import matplotlib.pyplot as plt
 
-# Get camera calibration for reprojection
+# Get camera calibration for reprojection (use pipeline's internal filtered keypoints)
 print("  - Calibrating camera...")
-table_det_model = torch.hub.load(repo, "table_detection",
-                                 model_name="segformerpp_b2", trust_repo=True)
-table_kps, _ = table_det_model.predict(images)
-Mint, Mext = pipeline.calibrate_camera(table_kps[0])
+table_kps, _ = pipeline.table_detector.predict(images)
+table_kps_aux, _ = pipeline.table_detector_aux.predict(images)
+filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
+    table_kps, table_kps_aux)
+Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
 reprojected_2d = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
 # Also get ball detections for visualization

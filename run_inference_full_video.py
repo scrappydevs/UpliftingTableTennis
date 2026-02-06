@@ -256,10 +256,6 @@ import matplotlib.pyplot as plt
 
 pipeline = torch.hub.load(repo, "full_pipeline", trust_repo=True)
 
-# Also load table detection for visualization
-table_det = torch.hub.load(repo, "table_detection",
-                           model_name="segformerpp_b2", trust_repo=True)
-
 output_dir = "output"
 shots_dir = os.path.join(output_dir, "shots")
 os.makedirs(shots_dir, exist_ok=True)
@@ -302,8 +298,12 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
             spin_type = "Flat"
 
         # Camera calibration for reprojection
-        table_kps, _ = table_det.predict(shot_images)
-        Mint, Mext = pipeline.calibrate_camera(table_kps[0])
+        # Use BOTH table detection models + filtering (matches pipeline internals)
+        table_kps, _ = pipeline.table_detector.predict(shot_images)
+        table_kps_aux, _ = pipeline.table_detector_aux.predict(shot_images)
+        filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
+            table_kps, table_kps_aux)
+        Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
         reprojected = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
         # Ball detections for this shot (from the full-video detection pass)
