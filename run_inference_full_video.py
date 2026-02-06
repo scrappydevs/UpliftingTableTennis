@@ -5,8 +5,9 @@ Automatically:
   1. Detects the ball in every frame
   2. Segments the video into individual rallies (by detection gaps)
   3. Splits each rally into individual shots (by direction reversals)
-  4. Runs the full 3D uplifting + spin estimation on each shot
-  5. Outputs annotated videos + per-shot results
+  4. Filters out likely false shots (flickery/non-coherent trajectories)
+  5. Runs the full 3D uplifting + spin estimation on each kept shot
+  6. Outputs annotated videos + per-shot results
 
 Usage:
     python run_inference_full_video.py --video match.mp4
@@ -49,11 +50,37 @@ parser.add_argument("--detector_chunk_size", type=int, default=256,
                     help="Triples per detection batch (default: 256)")
 parser.add_argument("--max_buffer_gb", type=float, default=6.0,
                     help="Abort if estimated frame buffer exceeds this many GB (default: 6.0)")
+parser.add_argument("--disable_shot_quality_filter", action="store_true",
+                    help="Disable post-segmentation shot quality filtering")
+parser.add_argument("--min_valid_points", type=int, default=8,
+                    help="Min high-confidence detections in a shot to keep it (default: 8)")
+parser.add_argument("--min_displacement_px", type=float, default=90.0,
+                    help="Min start-to-end displacement in model pixels (default: 90)")
+parser.add_argument("--max_path_ratio", type=float, default=6.0,
+                    help="Max path_length/displacement ratio before shot is considered flickery (default: 6.0)")
+parser.add_argument("--max_jump_px", type=float, default=140.0,
+                    help="Max per-step jump threshold in model pixels (default: 140)")
+parser.add_argument("--max_jump_ratio", type=float, default=0.35,
+                    help="Max fraction of oversized jumps allowed in a shot (default: 0.35)")
+parser.add_argument("--min_direction_consistency", type=float, default=0.55,
+                    help="Min dominant horizontal direction consistency in a shot (default: 0.55)")
 args = parser.parse_args()
 if args.detector_chunk_size <= 0:
     parser.error("--detector_chunk_size must be > 0")
 if args.max_buffer_gb <= 0:
     parser.error("--max_buffer_gb must be > 0")
+if args.min_valid_points <= 1:
+    parser.error("--min_valid_points must be > 1")
+if args.min_displacement_px <= 0:
+    parser.error("--min_displacement_px must be > 0")
+if args.max_path_ratio <= 1:
+    parser.error("--max_path_ratio must be > 1")
+if args.max_jump_px <= 0:
+    parser.error("--max_jump_px must be > 0")
+if not (0.0 <= args.max_jump_ratio <= 1.0):
+    parser.error("--max_jump_ratio must be between 0 and 1")
+if not (0.0 <= args.min_direction_consistency <= 1.0):
+    parser.error("--min_direction_consistency must be between 0 and 1")
 
 # ── Environment ────────────────────────────────────────────────────
 print("=" * 70)
@@ -69,7 +96,7 @@ print("=" * 70)
 
 
 # ── 1. Load video ─────────────────────────────────────────────────
-print(f"\n[1/6] Loading video: {args.video}")
+print(f"\n[1/7] Loading video: {args.video}")
 cap = cv2.VideoCapture(args.video)
 if not cap.isOpened():
     print(f"ERROR: Cannot open video: {args.video}")
@@ -152,7 +179,7 @@ def predict_ball_positions_chunked(detector, frames, chunk_size):
 
 
 # ── 2. Run ball detection on full video ────────────────────────────
-print(f"\n[2/6] Running ball detection on {len(images)} frames...")
+print(f"\n[2/7] Running ball detection on {len(images)} frames...")
 repo = "KieDani/UpliftingTableTennis"
 
 t0 = time.time()
@@ -196,7 +223,7 @@ padded_positions[-1, :2] = ball_positions[-1, :2]
 
 
 # ── 3. Segment into rallies and shots ─────────────────────────────
-print(f"\n[3/6] Segmenting video into rallies and shots...")
+print(f"\n[3/7] Segmenting video into rallies and shots...")
 
 confidences = padded_positions[:, 2]
 x_positions = padded_positions[:, 0]
@@ -302,21 +329,125 @@ def find_shots_in_rally(x_pos, conf, rally_start, rally_end, min_frames, window)
     return shots
 
 
-all_shots = []
+def assess_shot_quality(shot_positions, conf_threshold):
+    """
+    Return (keep, metrics, reason) for a candidate shot.
+    We reject highly flickery tracks that do not resemble a coherent ball trajectory.
+    """
+    valid_mask = shot_positions[:, 2] >= conf_threshold
+    valid_points = shot_positions[valid_mask, :2]
+    num_valid = int(valid_points.shape[0])
+
+    metrics = {
+        "num_valid_points": num_valid,
+        "valid_ratio": float(num_valid / max(1, len(shot_positions))),
+        "displacement_px": 0.0,
+        "path_ratio": 0.0,
+        "jump_ratio": 1.0,
+        "direction_consistency": 0.0,
+    }
+
+    if num_valid < args.min_valid_points:
+        return False, metrics, "too_few_valid_points"
+
+    diffs = np.diff(valid_points, axis=0)
+    if diffs.shape[0] == 0:
+        return False, metrics, "too_few_motion_steps"
+
+    step_dist = np.linalg.norm(diffs, axis=1)
+    displacement = float(np.linalg.norm(valid_points[-1] - valid_points[0]))
+    path_length = float(step_dist.sum())
+    path_ratio = float(path_length / max(displacement, 1e-6))
+    jump_ratio = float(np.mean(step_dist > args.max_jump_px)) if len(step_dist) > 0 else 1.0
+
+    dx = diffs[:, 0]
+    moving_dx = dx[np.abs(dx) > 2.0]
+    if moving_dx.size == 0:
+        direction_consistency = 0.0
+    else:
+        pos = int(np.sum(moving_dx > 0))
+        neg = int(np.sum(moving_dx < 0))
+        direction_consistency = float(max(pos, neg) / max(1, pos + neg))
+
+    metrics.update({
+        "displacement_px": displacement,
+        "path_ratio": path_ratio,
+        "jump_ratio": jump_ratio,
+        "direction_consistency": direction_consistency,
+    })
+
+    if displacement < args.min_displacement_px:
+        return False, metrics, "low_displacement"
+    if path_ratio > args.max_path_ratio:
+        return False, metrics, "high_path_ratio_flicker"
+    if jump_ratio > args.max_jump_ratio:
+        return False, metrics, "high_jump_ratio_flicker"
+    if direction_consistency < args.min_direction_consistency:
+        return False, metrics, "low_direction_consistency"
+
+    return True, metrics, "passed"
+
+
+candidate_shots = []
 for rally_idx, (rs, re) in enumerate(rally_segments):
     shots = find_shots_in_rally(x_positions, confidences, rs, re,
                                 args.min_shot_frames, args.smoothing_window)
     for shot in shots:
-        all_shots.append((rally_idx, shot[0], shot[1]))
+        candidate_shots.append((rally_idx, shot[0], shot[1]))
 
-print(f"\n  Found {len(all_shots)} individual shots across {len(rally_segments)} rallies:")
-for idx, (rally, s, e) in enumerate(all_shots):
+print(f"\n  Found {len(candidate_shots)} individual shots across {len(rally_segments)} rallies:")
+for idx, (rally, s, e) in enumerate(candidate_shots):
     print(f"    Shot {idx+1} (rally {rally+1}): frames {s}-{e} "
           f"({e-s} frames, {(e-s)/fps:.2f}s)")
 
 
-# ── 4. Run full pipeline on each shot ─────────────────────────────
-print(f"\n[4/6] Running 3D uplifting on {len(all_shots)} shots...")
+# ── 4. Filter false shots by trajectory quality ───────────────────
+print(f"\n[4/7] Filtering candidate shots by trajectory quality...")
+
+all_shots = []
+accepted_shot_quality = []
+filtered_out_shots = []
+for candidate_idx, (rally_idx, start, end) in enumerate(candidate_shots):
+    keep_by_quality, metrics, reason = assess_shot_quality(
+        padded_positions[start:end], args.confidence_threshold)
+    keep = True if args.disable_shot_quality_filter else keep_by_quality
+    quality_info = {
+        "candidate_index": int(candidate_idx),
+        "rally_index": int(rally_idx),
+        "start_frame": int(start),
+        "end_frame": int(end),
+        "num_frames": int(end - start),
+        "passed_quality_filter": bool(keep),
+        "filter_reason": "filter_disabled" if args.disable_shot_quality_filter else reason,
+        "num_valid_points": int(metrics["num_valid_points"]),
+        "valid_ratio": float(metrics["valid_ratio"]),
+        "displacement_px": float(metrics["displacement_px"]),
+        "path_ratio": float(metrics["path_ratio"]),
+        "jump_ratio": float(metrics["jump_ratio"]),
+        "direction_consistency": float(metrics["direction_consistency"]),
+    }
+    status = "KEEP" if keep else "DROP"
+    print(f"    {status} shot {candidate_idx+1}: frames {start}-{end} "
+          f"| reason={quality_info['filter_reason']} "
+          f"| valid={quality_info['num_valid_points']} "
+          f"| disp={quality_info['displacement_px']:.1f} "
+          f"| path_ratio={quality_info['path_ratio']:.2f}")
+    if keep:
+        all_shots.append((rally_idx, start, end))
+        accepted_shot_quality.append(quality_info)
+    else:
+        filtered_out_shots.append(quality_info)
+
+if args.disable_shot_quality_filter:
+    print("  Shot quality filter is disabled (--disable_shot_quality_filter).")
+print(f"  Kept {len(all_shots)} / {len(candidate_shots)} candidate shots")
+print(f"  Filtered out {len(filtered_out_shots)} likely false shots")
+if len(all_shots) == 0:
+    print("WARNING: No shots remained after filtering. Output video will contain no shot trajectories.")
+
+
+# ── 5. Run full pipeline on each shot ─────────────────────────────
+print(f"\n[5/7] Running 3D uplifting on {len(all_shots)} shots...")
 
 import matplotlib
 matplotlib.use("Agg")
@@ -344,6 +475,7 @@ shot_results = []
 
 for idx, (rally_idx, start, end) in enumerate(all_shots):
     shot_images = images[start:end]
+    shot_quality = accepted_shot_quality[idx] if idx < len(accepted_shot_quality) else None
     print(f"\n  Shot {idx+1}/{len(all_shots)} "
           f"(rally {rally_idx+1}, frames {start}-{end}, {len(shot_images)} frames)")
 
@@ -391,6 +523,7 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
             "spin_magnitude_rpm": float(abs(spin_mag) * 60),
             "trajectory_3d": pred_pos_3d.tolist(),
             "trajectory_2d_reprojected": reprojected.tolist(),
+            "shot_quality": shot_quality,
         }
         shot_results.append(result)
 
@@ -509,8 +642,8 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         shot_results.append(None)
 
 
-# ── 5. Generate per-shot 3D trajectory plots ──────────────────────
-print(f"\n[5/6] Generating 3D trajectory plots...")
+# ── 6. Generate per-shot 3D trajectory plots ──────────────────────
+print(f"\n[6/7] Generating 3D trajectory plots...")
 
 table_length, table_width, table_height = 2.74, 1.525, 0.76
 table_corners = np.array([
@@ -552,8 +685,8 @@ for idx, result in enumerate(shot_results):
     print(f"  Shot {idx+1}: {plot_path}")
 
 
-# ── 6. Generate full annotated video ──────────────────────────────
-print(f"\n[6/6] Creating full annotated video...")
+# ── 7. Generate full annotated video ──────────────────────────────
+print(f"\n[7/7] Creating full annotated video...")
 
 # Build lookup: frame_idx -> shot indices active at that frame
 frame_to_shots = defaultdict(list)
@@ -635,8 +768,22 @@ summary = {
     "total_frames": len(images),
     "total_duration_sec": len(images) / fps,
     "num_rallies": len(rally_segments),
+    "num_shot_candidates": len(candidate_shots),
+    "num_shots_after_quality_filter": len(all_shots),
+    "num_filtered_out_by_quality": len(filtered_out_shots),
+    "quality_filter_enabled": not args.disable_shot_quality_filter,
+    "quality_filter_settings": {
+        "confidence_threshold": args.confidence_threshold,
+        "min_valid_points": args.min_valid_points,
+        "min_displacement_px": args.min_displacement_px,
+        "max_path_ratio": args.max_path_ratio,
+        "max_jump_px": args.max_jump_px,
+        "max_jump_ratio": args.max_jump_ratio,
+        "min_direction_consistency": args.min_direction_consistency,
+    },
     "num_shots": len(all_shots),
     "num_successful": sum(1 for r in shot_results if r is not None),
+    "filtered_out_shots": filtered_out_shots,
     "shots": [],
 }
 for idx, result in enumerate(shot_results):
@@ -661,8 +808,14 @@ print(f"\n{'=' * 70}")
 print("SUMMARY")
 print(f"{'=' * 70}")
 print(f"  Rallies detected:  {len(rally_segments)}")
-print(f"  Shots detected:    {len(all_shots)}")
+print(f"  Shot candidates:   {len(candidate_shots)}")
+print(f"  Shots kept:        {len(all_shots)}")
+print(f"  Shots filtered:    {len(filtered_out_shots)}")
 print(f"  Shots processed:   {sum(1 for r in shot_results if r is not None)}")
+if args.disable_shot_quality_filter:
+    print("  Quality filter:    disabled")
+else:
+    print("  Quality filter:    enabled")
 print()
 for idx, result in enumerate(shot_results):
     if result is None:
