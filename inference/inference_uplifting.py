@@ -188,10 +188,10 @@ def inference_ttst(model_path, special_transform):
             # resize the coordinates to correct resolution for evaluation
             if (HEIGHT, WIDTH) != (SYNTHETIC_HEIGHT, SYNTHETIC_WIDTH):
                 scale_x, scale_y = WIDTH / SYNTHETIC_WIDTH, HEIGHT / SYNTHETIC_HEIGHT
-                r_img[0] = (r_img[0] + 0.5) * scale_x - 0.5
-                r_img[1] = (r_img[1] + 0.5) * scale_y - 0.5
-                pred_pos_2D[0] = (pred_pos_2D[0] + 0.5) * scale_x - 0.5
-                pred_pos_2D[1] = (pred_pos_2D[1] + 0.5) * scale_y - 0.5
+                r_img[..., 0] = (r_img[..., 0] + 0.5) * scale_x - 0.5
+                r_img[..., 1] = (r_img[..., 1] + 0.5) * scale_y - 0.5
+                pred_pos_2D[..., 0] = (pred_pos_2D[..., 0] + 0.5) * scale_x - 0.5
+                pred_pos_2D[..., 1] = (pred_pos_2D[..., 1] + 0.5) * scale_y - 0.5
 
             # calculate metrics
             metric = metric_fn(pred_pos_2D.cpu().numpy(), r_img, mask.cpu().numpy())
