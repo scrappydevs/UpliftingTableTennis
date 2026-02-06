@@ -96,6 +96,19 @@ if len(images) < 3:
 print(f"  ✓ Loaded {len(images)} frames (from frame {args.start_frame})")
 print(f"  ✓ Duration: {len(images)/fps:.2f} seconds")
 
+# The detection models output coordinates in a fixed 2560x1440 space.
+# Scale to actual video resolution for drawing.
+MODEL_W, MODEL_H = 2560, 1440
+sx = width / MODEL_W
+sy = height / MODEL_H
+print(f"  ✓ Coord scale: {MODEL_W}x{MODEL_H} -> {width}x{height} (sx={sx:.3f}, sy={sy:.3f})")
+
+
+def scale_xy(x, y):
+    """Convert model-space coordinates to video-space coordinates."""
+    return int(x * sx), int(y * sy)
+
+
 # ── Create output directory ────────────────────────────────────────
 output_dir = "output"
 os.makedirs(output_dir, exist_ok=True)
@@ -188,11 +201,13 @@ frame_idx = min(15, len(images) - 1)
 img_vis = images[frame_idx].copy()
 
 for i, (x, y) in enumerate(reprojected_2d):
-    cv2.circle(img_vis, (int(x), int(y)), 6, (0, 255, 255), -1)
+    dx, dy = scale_xy(x, y)
+    cv2.circle(img_vis, (dx, dy), 6, (0, 255, 255), -1)
 
 for i, (x, y, conf) in enumerate(ball_positions):
     if i == frame_idx - 1:
-        cv2.circle(img_vis, (int(x), int(y)), 8, (0, 255, 0), 2)
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img_vis, (dx, dy), 8, (0, 255, 0), 2)
 
 cv2.putText(img_vis, f"Spin: {spin_type} ({spin_magnitude:.1f} Hz)",
             (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3)
@@ -257,24 +272,28 @@ for frame_idx in range(len(images)):
         x, y, conf = ball_positions[i]
         alpha = 0.3 + 0.7 * (i / max(1, frame_idx))
         color = (0, int(255 * alpha), 0)
-        cv2.circle(img, (int(x), int(y)), 4, color, -1)
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 4, color, -1)
 
     # Current ball detection
     if 0 <= frame_idx - 1 < len(ball_positions):
         x, y, conf = ball_positions[frame_idx - 1]
-        cv2.circle(img, (int(x), int(y)), 12, (0, 255, 0), 3)
-        cv2.putText(img, f"{conf:.2f}", (int(x) + 15, int(y) - 15),
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 12, (0, 255, 0), 3)
+        cv2.putText(img, f"{conf:.2f}", (dx + 15, dy - 15),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
     # 3D trajectory
     for i, (x, y) in enumerate(reprojected_2d):
-        cv2.circle(img, (int(x), int(y)), 5, (0, 255, 255), -1)
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 5, (0, 255, 255), -1)
 
     # Table keypoints
     if frame_idx < len(table_kps):
         for kp_idx, (x, y, vis) in enumerate(table_kps[frame_idx]):
             if vis > 0.5:
-                cv2.circle(img, (int(x), int(y)), 4, (255, 0, 255), -1)
+                dx, dy = scale_xy(x, y)
+                cv2.circle(img, (dx, dy), 4, (255, 0, 255), -1)
 
     # Info overlay
     cv2.rectangle(img, (10, 10), (width - 10, 120), (0, 0, 0), -1)

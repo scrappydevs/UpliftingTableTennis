@@ -46,7 +46,20 @@ images = [cv2.imread(os.path.join(image_folder, f"{i:02d}.png")) for i in range(
 fps = 60.0
 print(f"  ✓ Loaded {len(images)} images at {fps} fps")
 print(f"  ✓ Duration: {len(images)/fps:.2f} seconds")
-print(f"  ✓ Resolution: {images[0].shape[1]}x{images[0].shape[0]}")
+height, width = images[0].shape[:2]
+print(f"  ✓ Resolution: {width}x{height}")
+
+# The detection models output coordinates in a fixed 2560x1440 space.
+# Scale to actual image resolution for drawing.
+MODEL_W, MODEL_H = 2560, 1440
+sx = width / MODEL_W
+sy = height / MODEL_H
+
+
+def scale_xy(x, y):
+    """Convert model-space coordinates to video-space coordinates."""
+    return int(x * sx), int(y * sy)
+
 
 # ── 2. Load the full pipeline ─────────────────────────────────────
 print("\n[2/4] Loading full pipeline...")
@@ -126,12 +139,14 @@ img_vis = images[frame_idx].copy()
 # Draw all reprojected 3D points
 for i, (x, y) in enumerate(reprojected_2d):
     color = (0, 255, 255)  # Cyan for 3D trajectory
-    cv2.circle(img_vis, (int(x), int(y)), 6, color, -1)
+    dx, dy = scale_xy(x, y)
+    cv2.circle(img_vis, (dx, dy), 6, color, -1)
 
 # Draw ball detections in different color for comparison
 for i, (x, y, conf) in enumerate(ball_positions):
     if i == frame_idx - 1:  # Account for offset (triples start at frame 1)
-        cv2.circle(img_vis, (int(x), int(y)), 8, (0, 255, 0), 2)  # Green circle for detection
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img_vis, (dx, dy), 8, (0, 255, 0), 2)  # Green circle for detection
 
 # Add text overlay
 cv2.putText(img_vis, f"Spin: {spin_type} ({spin_magnitude:.1f} Hz)",
@@ -199,24 +214,28 @@ for frame_idx in range(len(images)):
         x, y, conf = ball_positions[i]
         alpha = 0.3 + 0.7 * (i / max(1, frame_idx))  # Fade older detections
         color = (0, int(255 * alpha), 0)
-        cv2.circle(img, (int(x), int(y)), 4, color, -1)
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 4, color, -1)
 
     # Draw current ball detection with highlight
     if 0 <= frame_idx - 1 < len(ball_positions):
         x, y, conf = ball_positions[frame_idx - 1]
-        cv2.circle(img, (int(x), int(y)), 12, (0, 255, 0), 3)
-        cv2.putText(img, f"{conf:.2f}", (int(x) + 15, int(y) - 15),
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 12, (0, 255, 0), 3)
+        cv2.putText(img, f"{conf:.2f}", (dx + 15, dy - 15),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
     # Draw reprojected 3D trajectory
     for i, (x, y) in enumerate(reprojected_2d):
-        cv2.circle(img, (int(x), int(y)), 5, (0, 255, 255), -1)
+        dx, dy = scale_xy(x, y)
+        cv2.circle(img, (dx, dy), 5, (0, 255, 255), -1)
 
     # Draw table keypoints
     if frame_idx < len(table_kps):
         for kp_idx, (x, y, vis) in enumerate(table_kps[frame_idx]):
             if vis > 0.5:  # visible
-                cv2.circle(img, (int(x), int(y)), 4, (255, 0, 255), -1)
+                dx, dy = scale_xy(x, y)
+                cv2.circle(img, (dx, dy), 4, (255, 0, 255), -1)
 
     # Add info overlay
     cv2.rectangle(img, (10, 10), (width - 10, 120), (0, 0, 0), -1)

@@ -88,6 +88,18 @@ while count < args.max_frames:
 cap.release()
 print(f"  Loaded {len(images)} frames ({len(images)/fps:.1f}s)")
 
+# The detection models output coordinates in a fixed 2560x1440 space regardless
+# of actual input resolution. We need scale factors to draw on the real frames.
+MODEL_W, MODEL_H = 2560, 1440
+sx = width / MODEL_W    # scale x from model space -> video space
+sy = height / MODEL_H   # scale y from model space -> video space
+print(f"  Model coord space: {MODEL_W}x{MODEL_H} -> scale factors: sx={sx:.3f}, sy={sy:.3f}")
+
+
+def scale_xy(x, y):
+    """Convert model-space coordinates to video-space coordinates."""
+    return int(x * sx), int(y * sy)
+
 
 # ── 2. Run ball detection on full video ────────────────────────────
 print(f"\n[2/5] Running ball detection on {len(images)} frames...")
@@ -324,21 +336,24 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         img_snap = shot_images[mid].copy()
         shot_color = SHOT_COLORS[idx % len(SHOT_COLORS)]
 
-        # Draw full reprojected 3D trajectory
+        # Draw full reprojected 3D trajectory (scale from model space)
         for pt in reprojected:
-            cv2.circle(img_snap, (int(pt[0]), int(pt[1])), 6, shot_color, -1)
+            dx, dy = scale_xy(pt[0], pt[1])
+            cv2.circle(img_snap, (dx, dy), 6, shot_color, -1)
 
-        # Draw all 2D ball detections as trail
+        # Draw all 2D ball detections as trail (scale from model space)
         for i in range(len(shot_ball_positions)):
             bx, by, bc = shot_ball_positions[i]
             if bc >= args.confidence_threshold:
-                cv2.circle(img_snap, (int(bx), int(by)), 4, (0, 255, 0), -1)
+                dx, dy = scale_xy(bx, by)
+                cv2.circle(img_snap, (dx, dy), 4, (0, 255, 0), -1)
 
-        # Draw table keypoints on mid frame
+        # Draw table keypoints on mid frame (scale from model space)
         if mid < len(table_kps):
             for kx, ky, kv in table_kps[mid]:
                 if kv > 0.5:
-                    cv2.circle(img_snap, (int(kx), int(ky)), 5, (255, 0, 255), -1)
+                    dx, dy = scale_xy(kx, ky)
+                    cv2.circle(img_snap, (dx, dy), 5, (255, 0, 255), -1)
 
         # Text overlay
         cv2.rectangle(img_snap, (10, 10), (700, 130), (0, 0, 0), -1)
@@ -371,25 +386,29 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
                 bx, by, bc = shot_ball_positions[t]
                 if bc >= args.confidence_threshold:
                     alpha = (t - trail_start) / max(1, local_idx - trail_start)
-                    cv2.circle(img, (int(bx), int(by)), 4, (0, int(200 * alpha), 0), -1)
+                    dx, dy = scale_xy(bx, by)
+                    cv2.circle(img, (dx, dy), 4, (0, int(200 * alpha), 0), -1)
 
             # Current ball detection highlight
             if local_idx < len(shot_ball_positions):
                 bx, by, bc = shot_ball_positions[local_idx]
                 if bc >= args.confidence_threshold:
-                    cv2.circle(img, (int(bx), int(by)), 12, (0, 255, 0), 3)
-                    cv2.putText(img, f"{bc:.2f}", (int(bx) + 15, int(by) - 15),
+                    dx, dy = scale_xy(bx, by)
+                    cv2.circle(img, (dx, dy), 12, (0, 255, 0), 3)
+                    cv2.putText(img, f"{bc:.2f}", (dx + 15, dy - 15),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             # Reprojected 3D trajectory (full, always visible)
             for pt in reprojected:
-                cv2.circle(img, (int(pt[0]), int(pt[1])), 5, shot_color, -1)
+                dx, dy = scale_xy(pt[0], pt[1])
+                cv2.circle(img, (dx, dy), 5, shot_color, -1)
 
             # Table keypoints
             if local_idx < len(table_kps):
                 for kx, ky, kv in table_kps[local_idx]:
                     if kv > 0.5:
-                        cv2.circle(img, (int(kx), int(ky)), 4, (255, 0, 255), -1)
+                        dx, dy = scale_xy(kx, ky)
+                        cv2.circle(img, (dx, dy), 4, (255, 0, 255), -1)
 
             # Info overlay
             cv2.rectangle(img, (10, 10), (width - 10, 130), (0, 0, 0), -1)
@@ -490,13 +509,15 @@ for frame_idx in range(len(images)):
         if bc >= args.confidence_threshold:
             alpha = (t - trail_start) / max(1, frame_idx - trail_start)
             color = (0, int(180 * alpha), 0)
-            cv2.circle(img, (int(bx), int(by)), 3, color, -1)
+            dx, dy = scale_xy(bx, by)
+            cv2.circle(img, (dx, dy), 3, color, -1)
 
     # Draw current ball detection
     if frame_idx < len(padded_positions):
         bx, by, bc = padded_positions[frame_idx]
         if bc >= args.confidence_threshold:
-            cv2.circle(img, (int(bx), int(by)), 10, (0, 255, 0), 3)
+            dx, dy = scale_xy(bx, by)
+            cv2.circle(img, (dx, dy), 10, (0, 255, 0), 3)
 
     # Draw reprojected 3D trajectory for active shots
     active_shot_indices = frame_to_shots.get(frame_idx, [])
@@ -506,7 +527,8 @@ for frame_idx in range(len(images)):
             continue
         color = SHOT_COLORS[shot_idx % len(SHOT_COLORS)]
         for pt in result["trajectory_2d_reprojected"]:
-            cv2.circle(img, (int(pt[0]), int(pt[1])), 5, color, -1)
+            dx, dy = scale_xy(pt[0], pt[1])
+            cv2.circle(img, (dx, dy), 5, color, -1)
 
     # Info overlay
     overlay_h = 100
