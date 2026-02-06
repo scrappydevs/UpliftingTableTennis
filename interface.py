@@ -8,7 +8,7 @@ import einops as eo
 
 from inference.utils import HEIGHT, WIDTH
 from inference.utils import process_trajectory_ball, calibrate_camera, filter_trajectory_ball
-from inference.utils import extract_position_table
+from inference.utils import extract_position_ball, extract_position_table
 from inference.utils import BALL_VISIBLE, KEYPOINT_VISIBLE, world2cam, cam2img
 from inference.utils import process_trajectory_table, calibrate_camera, filter_trajectory_table
 from inference.utils import process_trajectory_uplifting, _uplifting_transform
@@ -113,7 +113,7 @@ class BallDetector:
             with torch.no_grad():
                 # apply model
                 preds_tmp, _ = self.model(input_tensor.unsqueeze(0))
-                pred_pos_tmp = extract_position_table(preds_tmp, self.resolution[0], self.resolution[1])
+                pred_pos_tmp = extract_position_ball(preds_tmp, self.resolution[0], self.resolution[1])
                 preds_tmp = preds_tmp.squeeze(0).cpu().numpy()
             pred_pos.append(pred_pos_tmp.squeeze(0))
             preds.append(preds_tmp)

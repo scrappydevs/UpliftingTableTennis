@@ -70,6 +70,9 @@ height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # Use user-specified FPS or video FPS
 fps = args.fps if args.fps is not None else video_fps
+if not np.isfinite(fps) or fps <= 0:
+    print(f"WARNING: Invalid FPS '{fps}'. Falling back to 60.0.")
+    fps = 60.0
 
 print(f"  ✓ Video FPS: {video_fps:.1f}")
 print(f"  ✓ Using FPS: {fps:.1f} (for physics calculations)")
@@ -185,7 +188,7 @@ table_kps, _ = pipeline.table_detector.predict(images)
 table_kps_aux, _ = pipeline.table_detector_aux.predict(images)
 filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
     table_kps, table_kps_aux)
-Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
+Mint, Mext = pipeline.calibrate_camera(filtered_table_kps)
 reprojected_2d = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
 # Get ball detections

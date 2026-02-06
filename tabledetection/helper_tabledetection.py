@@ -139,7 +139,6 @@ def extract_position_torch_gaussian(heatmaps, image_width, image_height, thresho
 
             positions[b, c, 0] = x_subpixel
             positions[b, c, 1] = y_subpixel
-            positions[b, c, 2] = KEYPOINT_VISIBLE
 
     # Scale heatmap coordinates to image coordinates
     scale_x = image_width / heatmap_width

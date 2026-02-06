@@ -35,8 +35,8 @@ parser = argparse.ArgumentParser(description="Process full table tennis video")
 parser.add_argument("--video", type=str, required=True)
 parser.add_argument("--fps", type=float, default=None,
                     help="Override video FPS (auto-detected if omitted)")
-parser.add_argument("--max_frames", type=int, default=5000,
-                    help="Max frames to process (default: 5000)")
+parser.add_argument("--max_frames", type=int, default=900,
+                    help="Max frames to process (default: 900)")
 parser.add_argument("--confidence_threshold", type=float, default=0.3,
                     help="Min ball detection confidence (default: 0.3)")
 parser.add_argument("--min_shot_frames", type=int, default=10,
@@ -45,7 +45,15 @@ parser.add_argument("--gap_frames", type=int, default=20,
                     help="Consecutive low-confidence frames to mark rally break (default: 20)")
 parser.add_argument("--smoothing_window", type=int, default=5,
                     help="Smoothing window for direction detection (default: 5)")
+parser.add_argument("--detector_chunk_size", type=int, default=256,
+                    help="Triples per detection batch (default: 256)")
+parser.add_argument("--max_buffer_gb", type=float, default=6.0,
+                    help="Abort if estimated frame buffer exceeds this many GB (default: 6.0)")
 args = parser.parse_args()
+if args.detector_chunk_size <= 0:
+    parser.error("--detector_chunk_size must be > 0")
+if args.max_buffer_gb <= 0:
+    parser.error("--max_buffer_gb must be > 0")
 
 # ── Environment ────────────────────────────────────────────────────
 print("=" * 70)
@@ -61,7 +69,7 @@ print("=" * 70)
 
 
 # ── 1. Load video ─────────────────────────────────────────────────
-print(f"\n[1/5] Loading video: {args.video}")
+print(f"\n[1/6] Loading video: {args.video}")
 cap = cv2.VideoCapture(args.video)
 if not cap.isOpened():
     print(f"ERROR: Cannot open video: {args.video}")
@@ -72,14 +80,33 @@ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = args.fps if args.fps is not None else video_fps
+if not np.isfinite(fps) or fps <= 0:
+    print(f"WARNING: Invalid FPS '{fps}'. Falling back to 60.0.")
+    fps = 60.0
+
+frames_to_process = min(total_frames, args.max_frames)
+estimated_gb = (frames_to_process * width * height * 3) / (1024 ** 3)
 
 print(f"  Video FPS: {video_fps:.1f} | Using: {fps:.1f}")
-print(f"  Total frames: {total_frames} | Processing: {min(total_frames, args.max_frames)}")
+print(f"  Total frames: {total_frames} | Processing: {frames_to_process}")
 print(f"  Resolution: {width}x{height}")
+print(f"  Estimated frame buffer: {estimated_gb:.2f} GB")
+
+if frames_to_process < 3:
+    print(f"ERROR: Need at least 3 frames to run temporal ball detection, got {frames_to_process}.")
+    cap.release()
+    sys.exit(1)
+
+if estimated_gb > args.max_buffer_gb:
+    safe_frames = int((args.max_buffer_gb * (1024 ** 3)) / max(1, width * height * 3))
+    print(f"ERROR: Estimated frame buffer ({estimated_gb:.2f} GB) exceeds --max_buffer_gb={args.max_buffer_gb:.2f}.")
+    print(f"       Reduce --max_frames to <= {safe_frames} for this resolution.")
+    cap.release()
+    sys.exit(1)
 
 images = []
 count = 0
-while count < args.max_frames:
+while count < frames_to_process:
     ret, frame = cap.read()
     if not ret:
         break
@@ -87,6 +114,9 @@ while count < args.max_frames:
     count += 1
 cap.release()
 print(f"  Loaded {len(images)} frames ({len(images)/fps:.1f}s)")
+if len(images) < 3:
+    print(f"ERROR: Need at least 3 decodable frames to run temporal ball detection, got {len(images)}.")
+    sys.exit(1)
 
 # The detection models output coordinates in a fixed 1920x1080 space regardless
 # of actual input resolution. We need scale factors to draw on the real frames.
@@ -101,34 +131,72 @@ def scale_xy(x, y):
     return int(x * sx), int(y * sy)
 
 
+def predict_ball_positions_chunked(detector, frames, chunk_size):
+    """Run temporal ball detection without building one huge triple list."""
+    if len(frames) < 3:
+        return np.empty((0, 3), dtype=np.float32)
+
+    chunked_positions = []
+    for start in range(1, len(frames) - 1, chunk_size):
+        end = min(start + chunk_size, len(frames) - 1)
+        triples = [
+            (frames[i - 1], frames[i], frames[i + 1])
+            for i in range(start, end)
+        ]
+        positions, _ = detector.predict(triples)
+        chunked_positions.append(positions)
+
+    if not chunked_positions:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.concatenate(chunked_positions, axis=0)
+
+
 # ── 2. Run ball detection on full video ────────────────────────────
-print(f"\n[2/5] Running ball detection on {len(images)} frames...")
+print(f"\n[2/6] Running ball detection on {len(images)} frames...")
 repo = "KieDani/UpliftingTableTennis"
 
 t0 = time.time()
-ball_det = torch.hub.load(repo, "ball_detection",
-                          model_name="segformerpp_b2", trust_repo=True)
+ball_det = torch.hub.load(repo, "ball_detection", model_name="segformerpp_b2", trust_repo=True)
+ball_det_aux = torch.hub.load(repo, "ball_detection", model_name="wasb", trust_repo=True)
 
-image_triples = [
-    (images[i - 1].copy(), images[i].copy(), images[i + 1].copy())
-    for i in range(1, len(images) - 1)
-]
-ball_positions, _ = ball_det.predict(image_triples)
+ball_positions = predict_ball_positions_chunked(ball_det, images, args.detector_chunk_size)
+ball_positions_aux = predict_ball_positions_chunked(ball_det_aux, images, args.detector_chunk_size)
+
+if len(ball_positions) != len(ball_positions_aux):
+    print("ERROR: Primary and auxiliary detector outputs have mismatched lengths.")
+    sys.exit(1)
+if len(ball_positions) == 0:
+    print("ERROR: Ball detector produced no outputs. Check the input video and model setup.")
+    sys.exit(1)
+
+# Confidence proxy from detector agreement. This is robust to always-on visibility flags.
+disagreement = np.linalg.norm(ball_positions[:, :2] - ball_positions_aux[:, :2], axis=1)
+agreement_conf = np.clip(1.0 - (disagreement / 40.0), 0.0, 1.0)
+visible_mask = np.logical_and(ball_positions[:, 2] > 0.5, ball_positions_aux[:, 2] > 0.5)
+agreement_conf *= visible_mask.astype(np.float32)
+
 print(f"  Ball detection done in {time.time() - t0:.1f}s")
 print(f"  Detections: {len(ball_positions)} (frames 1..{len(images)-2})")
+if len(agreement_conf) > 0:
+    print(f"  Confidence (agreement) mean={agreement_conf.mean():.3f}, "
+          f"p10={np.percentile(agreement_conf, 10):.3f}, "
+          f"p90={np.percentile(agreement_conf, 90):.3f}")
+else:
+    print("  Confidence (agreement): no valid detections")
 
 # ball_positions is (N, 3) where N = len(images)-2, columns = [x, y, confidence]
 # Index i in ball_positions corresponds to frame i+1 in images
 # We pad to align with frame indices
-padded_positions = np.zeros((len(images), 3))
-padded_positions[1:-1] = ball_positions
-# Copy edge values for padding
-padded_positions[0] = padded_positions[1]
-padded_positions[-1] = padded_positions[-2]
+padded_positions = np.zeros((len(images), 3), dtype=np.float32)
+padded_positions[1:-1, :2] = ball_positions[:, :2]
+padded_positions[1:-1, 2] = agreement_conf
+# Keep edge coordinates but leave confidence at zero (no temporal context at boundaries).
+padded_positions[0, :2] = ball_positions[0, :2]
+padded_positions[-1, :2] = ball_positions[-1, :2]
 
 
 # ── 3. Segment into rallies and shots ─────────────────────────────
-print(f"\n[3/5] Segmenting video into rallies and shots...")
+print(f"\n[3/6] Segmenting video into rallies and shots...")
 
 confidences = padded_positions[:, 2]
 x_positions = padded_positions[:, 0]
@@ -303,7 +371,7 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         table_kps_aux, _ = pipeline.table_detector_aux.predict(shot_images)
         filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
             table_kps, table_kps_aux)
-        Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
+        Mint, Mext = pipeline.calibrate_camera(filtered_table_kps)
         reprojected = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
         # Ball detections for this shot (from the full-video detection pass)

@@ -81,7 +81,7 @@ table_kps, _ = pipeline.table_detector.predict(images)
 table_kps_aux, _ = pipeline.table_detector_aux.predict(images)
 filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
     table_kps, table_kps_aux)
-Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
+Mint, Mext = pipeline.calibrate_camera(filtered_table_kps)
 reprojected_2d = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
 # Plot reprojected 3D trajectory on a sample frame

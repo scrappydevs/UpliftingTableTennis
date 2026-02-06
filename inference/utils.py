@@ -95,9 +95,16 @@ def filter_trajectory_ball(pred_positions1, pred_positions2, fps):
         valid_indices.append(t)
         valid_predictions.append(pred_positions1[t])
 
-    valid_predictions = np.array(valid_predictions)[:, :2]  # T' x 2
-    valid_indices = np.array(valid_indices)  # T'
-    times = np.array(times)  # T'
+    if len(valid_predictions) == 0:
+        return (
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0,), dtype=np.float32),
+        )
+
+    valid_predictions = np.asarray(valid_predictions, dtype=np.float32)[:, :2]  # T' x 2
+    valid_indices = np.asarray(valid_indices, dtype=np.int64)  # T'
+    times = np.asarray(times, dtype=np.float32)  # T'
 
     return valid_predictions, valid_indices, times
 
@@ -280,12 +287,19 @@ def _uplifting_transform(ball_coords, table_coords, times):
         times: (1, seq_len) torch tensor of times with T' out of seq_len valid positions
         mask: (1, seq_len) torch tensor mask indicating valid ball positions
     '''
+    ball_coords = np.asarray(ball_coords, dtype=np.float32)
+    table_coords = np.asarray(table_coords, dtype=np.float32)
+    times = np.asarray(times, dtype=np.float32)
+
+    if ball_coords.ndim != 2 or ball_coords.shape[1] != 2:
+        raise ValueError(f'Expected ball_coords with shape (T, 2), got {ball_coords.shape}.')
+    if ball_coords.shape[0] == 0:
+        raise ValueError('No valid ball detections after filtering.')
+
     # Normalize ball coordinates
-    ball_coords = ball_coords.copy()
-    ball_coords = ball_coords / np.array([WIDTH, HEIGHT])
+    ball_coords = ball_coords / np.array([WIDTH, HEIGHT], dtype=np.float32)
     ball_coords = torch.tensor(ball_coords, dtype=torch.float32).unsqueeze(0)  # 1 x T' x 2
     # Normalize table coordinates
-    table_coords = table_coords.copy()
     table_coords[:, 0] = table_coords[:, 0] / WIDTH
     table_coords[:, 1] = table_coords[:, 1] / HEIGHT
     table_coords = torch.tensor(table_coords, dtype=torch.float32).unsqueeze(0)  # 1 x 13 x 3
@@ -303,8 +317,14 @@ def _uplifting_transform(ball_coords, table_coords, times):
         mask = torch.zeros((1, seq_len), dtype=torch.float32)
         mask[:, :T_prime] = 1.0
     else:
-        ball_coords = ball_coords[:, :seq_len, :]
-        times = torch.tensor(times[:seq_len], dtype=torch.float32).unsqueeze(0)  # 1 x seq_len
+        # Keep temporal coverage for long sequences by sampling across the full shot.
+        if T_prime > seq_len:
+            sample_indices = np.linspace(0, T_prime - 1, seq_len).astype(np.int64)
+            ball_coords = ball_coords[:, sample_indices, :]
+            times = times[sample_indices]
+        else:
+            times = times[:seq_len]
+        times = torch.tensor(times, dtype=torch.float32).unsqueeze(0)  # 1 x seq_len
         mask = torch.ones((1, seq_len), dtype=torch.float32)
     return ball_coords, table_coords, times, mask
 
