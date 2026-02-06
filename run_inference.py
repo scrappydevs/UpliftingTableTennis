@@ -5,7 +5,7 @@ Downloads weights and example images automatically via torch.hub.
 Usage:
     python run_inference.py
 
-Outputs are saved to the 'output/' directory.
+Outputs are saved to the 'output/initial/' directory.
 """
 
 import os
@@ -30,7 +30,7 @@ else:
 print("=" * 60)
 
 repo = "KieDani/UpliftingTableTennis"
-output_dir = "output"
+output_dir = "output/initial"
 os.makedirs(output_dir, exist_ok=True)
 
 # ── 1. Download example images ────────────────────────────────────
