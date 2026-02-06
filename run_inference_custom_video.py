@@ -96,9 +96,9 @@ if len(images) < 3:
 print(f"  ✓ Loaded {len(images)} frames (from frame {args.start_frame})")
 print(f"  ✓ Duration: {len(images)/fps:.2f} seconds")
 
-# The detection models output coordinates in a fixed 2560x1440 space.
+# The detection models output coordinates in a fixed 1920x1080 space.
 # Scale to actual video resolution for drawing.
-MODEL_W, MODEL_H = 2560, 1440
+MODEL_W, MODEL_H = 1920, 1080
 sx = width / MODEL_W
 sy = height / MODEL_H
 print(f"  ✓ Coord scale: {MODEL_W}x{MODEL_H} -> {width}x{height} (sx={sx:.3f}, sy={sy:.3f})")

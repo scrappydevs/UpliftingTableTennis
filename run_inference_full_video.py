@@ -88,9 +88,9 @@ while count < args.max_frames:
 cap.release()
 print(f"  Loaded {len(images)} frames ({len(images)/fps:.1f}s)")
 
-# The detection models output coordinates in a fixed 2560x1440 space regardless
+# The detection models output coordinates in a fixed 1920x1080 space regardless
 # of actual input resolution. We need scale factors to draw on the real frames.
-MODEL_W, MODEL_H = 2560, 1440
+MODEL_W, MODEL_H = 1920, 1080
 sx = width / MODEL_W    # scale x from model space -> video space
 sy = height / MODEL_H   # scale y from model space -> video space
 print(f"  Model coord space: {MODEL_W}x{MODEL_H} -> scale factors: sx={sx:.3f}, sy={sy:.3f}")

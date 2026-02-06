@@ -76,11 +76,12 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for headless servers
 import matplotlib.pyplot as plt
 
-# Get camera matrices for reprojection
-table_det_model = torch.hub.load(repo, "table_detection",
-                                 model_name="segformerpp_b2", trust_repo=True)
-table_kps, _ = table_det_model.predict(images)
-Mint, Mext = pipeline.calibrate_camera(table_kps[0])
+# Get camera matrices for reprojection (use pipeline's internal filtered keypoints)
+table_kps, _ = pipeline.table_detector.predict(images)
+table_kps_aux, _ = pipeline.table_detector_aux.predict(images)
+filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
+    table_kps, table_kps_aux)
+Mint, Mext = pipeline.calibrate_camera(filtered_table_kps[0])
 reprojected_2d = pipeline.reproject(pred_pos_3d, Mint, Mext)
 
 # Plot reprojected 3D trajectory on a sample frame

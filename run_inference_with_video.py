@@ -49,9 +49,9 @@ print(f"  ✓ Duration: {len(images)/fps:.2f} seconds")
 height, width = images[0].shape[:2]
 print(f"  ✓ Resolution: {width}x{height}")
 
-# The detection models output coordinates in a fixed 2560x1440 space.
+# The detection models output coordinates in a fixed 1920x1080 space.
 # Scale to actual image resolution for drawing.
-MODEL_W, MODEL_H = 2560, 1440
+MODEL_W, MODEL_H = 1920, 1080
 sx = width / MODEL_W
 sy = height / MODEL_H
 
