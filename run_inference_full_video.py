@@ -158,6 +158,38 @@ def scale_xy(x, y):
     return int(x * sx), int(y * sy)
 
 
+def safe_scale_xy(x, y):
+    """Convert model-space coordinates to video-space coordinates; return None on NaN/Inf."""
+    if not (np.isfinite(x) and np.isfinite(y)):
+        return None
+    return int(x * sx), int(y * sy)
+
+
+def sanitize_2d_points(points_2d):
+    """
+    Keep only finite 2D points from an Nx2 array-like.
+    Returns:
+      finite_points (np.ndarray shape (K,2))
+      num_dropped (int)
+    """
+    arr = np.asarray(points_2d, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] != 2:
+        return np.empty((0, 2), dtype=np.float32), 0
+    finite_mask = np.isfinite(arr).all(axis=1)
+    finite_points = arr[finite_mask]
+    return finite_points, int((~finite_mask).sum())
+
+
+def sanitize_3d_points(points_3d):
+    """Keep only finite 3D points from an Nx3 array-like."""
+    arr = np.asarray(points_3d, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        return np.empty((0, 3), dtype=np.float32), 0
+    finite_mask = np.isfinite(arr).all(axis=1)
+    finite_points = arr[finite_mask]
+    return finite_points, int((~finite_mask).sum())
+
+
 def predict_ball_positions_chunked(detector, frames, chunk_size):
     """Run temporal ball detection without building one huge triple list."""
     if len(frames) < 3:
@@ -489,7 +521,15 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         pred_spin, pred_pos_3d = pipeline.predict(shot_images, fps)
         elapsed = time.time() - t0
 
+        pred_pos_3d_finite, num_3d_dropped = sanitize_3d_points(pred_pos_3d)
+        if num_3d_dropped > 0:
+            print(f"    WARNING: dropped {num_3d_dropped} non-finite 3D trajectory points")
+        if pred_pos_3d_finite.shape[0] < 3:
+            raise ValueError("insufficient finite 3D points after sanitization")
+
         spin_mag = pred_spin[1].item() / (2 * np.pi)
+        if not np.isfinite(spin_mag):
+            raise ValueError("spin magnitude is non-finite")
         if spin_mag > 2:
             spin_type = "Topspin"
         elif spin_mag < -2:
@@ -504,7 +544,10 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         filtered_table_kps = pipeline.table_detector_aux.filter_trajectory(
             table_kps, table_kps_aux)
         Mint, Mext = pipeline.calibrate_camera(filtered_table_kps)
-        reprojected = pipeline.reproject(pred_pos_3d, Mint, Mext)
+        reprojected = pipeline.reproject(pred_pos_3d_finite, Mint, Mext)
+        reprojected_finite, num_reprojected_dropped = sanitize_2d_points(reprojected)
+        if num_reprojected_dropped > 0:
+            print(f"    WARNING: dropped {num_reprojected_dropped} non-finite reprojected points")
 
         # Ball detections for this shot (from the full-video detection pass)
         shot_ball_positions = padded_positions[start:end]
@@ -521,8 +564,14 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
             "spin_type": spin_type,
             "spin_magnitude_hz": float(spin_mag),
             "spin_magnitude_rpm": float(abs(spin_mag) * 60),
-            "trajectory_3d": pred_pos_3d.tolist(),
-            "trajectory_2d_reprojected": reprojected.tolist(),
+            "trajectory_3d": pred_pos_3d_finite.tolist(),
+            "trajectory_2d_reprojected": reprojected_finite.tolist(),
+            "reprojected_points_total": int(np.asarray(reprojected).shape[0]) if np.asarray(reprojected).ndim == 2 else 0,
+            "reprojected_points_valid": int(reprojected_finite.shape[0]),
+            "reprojected_points_dropped_non_finite": int(num_reprojected_dropped),
+            "trajectory_3d_points_total": int(np.asarray(pred_pos_3d).shape[0]) if np.asarray(pred_pos_3d).ndim == 2 else 0,
+            "trajectory_3d_points_valid": int(pred_pos_3d_finite.shape[0]),
+            "trajectory_3d_points_dropped_non_finite": int(num_3d_dropped),
             "shot_quality": shot_quality,
         }
         shot_results.append(result)
@@ -538,22 +587,31 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         shot_color = SHOT_COLORS[idx % len(SHOT_COLORS)]
 
         # Draw full reprojected 3D trajectory (scale from model space)
-        for pt in reprojected:
-            dx, dy = scale_xy(pt[0], pt[1])
+        for pt in reprojected_finite:
+            scaled = safe_scale_xy(pt[0], pt[1])
+            if scaled is None:
+                continue
+            dx, dy = scaled
             cv2.circle(img_snap, (dx, dy), 6, shot_color, -1)
 
         # Draw all 2D ball detections as trail (scale from model space)
         for i in range(len(shot_ball_positions)):
             bx, by, bc = shot_ball_positions[i]
             if bc >= args.confidence_threshold:
-                dx, dy = scale_xy(bx, by)
+                scaled = safe_scale_xy(bx, by)
+                if scaled is None:
+                    continue
+                dx, dy = scaled
                 cv2.circle(img_snap, (dx, dy), 4, (0, 255, 0), -1)
 
         # Draw table keypoints on mid frame (scale from model space)
         if mid < len(table_kps):
             for kx, ky, kv in table_kps[mid]:
                 if kv > 0.5:
-                    dx, dy = scale_xy(kx, ky)
+                    scaled = safe_scale_xy(kx, ky)
+                    if scaled is None:
+                        continue
+                    dx, dy = scaled
                     cv2.circle(img_snap, (dx, dy), 5, (255, 0, 255), -1)
 
         # Text overlay
@@ -566,7 +624,7 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
                     f"Spin: {spin_type} ({spin_mag:.1f} Hz / {abs(spin_mag)*60:.0f} RPM)",
                     (20, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.7, shot_color, 2)
         cv2.putText(img_snap,
-                    f"3D points: {pred_pos_3d.shape[0]} | Inference: {elapsed:.1f}s",
+                    f"3D points: {pred_pos_3d_finite.shape[0]} | Inference: {elapsed:.1f}s",
                     (20, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
         snap_path = os.path.join(shots_dir, f"shot_{idx:03d}.png")
@@ -587,28 +645,39 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
                 bx, by, bc = shot_ball_positions[t]
                 if bc >= args.confidence_threshold:
                     alpha = (t - trail_start) / max(1, local_idx - trail_start)
-                    dx, dy = scale_xy(bx, by)
+                    scaled = safe_scale_xy(bx, by)
+                    if scaled is None:
+                        continue
+                    dx, dy = scaled
                     cv2.circle(img, (dx, dy), 4, (0, int(200 * alpha), 0), -1)
 
             # Current ball detection highlight
             if local_idx < len(shot_ball_positions):
                 bx, by, bc = shot_ball_positions[local_idx]
                 if bc >= args.confidence_threshold:
-                    dx, dy = scale_xy(bx, by)
-                    cv2.circle(img, (dx, dy), 12, (0, 255, 0), 3)
-                    cv2.putText(img, f"{bc:.2f}", (dx + 15, dy - 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    scaled = safe_scale_xy(bx, by)
+                    if scaled is not None:
+                        dx, dy = scaled
+                        cv2.circle(img, (dx, dy), 12, (0, 255, 0), 3)
+                        cv2.putText(img, f"{bc:.2f}", (dx + 15, dy - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             # Reprojected 3D trajectory (full, always visible)
-            for pt in reprojected:
-                dx, dy = scale_xy(pt[0], pt[1])
+            for pt in reprojected_finite:
+                scaled = safe_scale_xy(pt[0], pt[1])
+                if scaled is None:
+                    continue
+                dx, dy = scaled
                 cv2.circle(img, (dx, dy), 5, shot_color, -1)
 
             # Table keypoints
             if local_idx < len(table_kps):
                 for kx, ky, kv in table_kps[local_idx]:
                     if kv > 0.5:
-                        dx, dy = scale_xy(kx, ky)
+                        scaled = safe_scale_xy(kx, ky)
+                        if scaled is None:
+                            continue
+                        dx, dy = scaled
                         cv2.circle(img, (dx, dy), 4, (255, 0, 255), -1)
 
             # Info overlay
@@ -633,7 +702,7 @@ for idx, (rally_idx, start, end) in enumerate(all_shots):
         shot_writer.release()
 
         print(f"    {spin_type} ({spin_mag:.1f} Hz / {abs(spin_mag)*60:.0f} RPM) "
-              f"| {pred_pos_3d.shape[0]} 3D points | {elapsed:.1f}s")
+              f"| {pred_pos_3d_finite.shape[0]} 3D points | {elapsed:.1f}s")
         print(f"    -> {snap_path}")
         print(f"    -> {shot_video_path}")
 
@@ -710,15 +779,20 @@ for frame_idx in range(len(images)):
         if bc >= args.confidence_threshold:
             alpha = (t - trail_start) / max(1, frame_idx - trail_start)
             color = (0, int(180 * alpha), 0)
-            dx, dy = scale_xy(bx, by)
+            scaled = safe_scale_xy(bx, by)
+            if scaled is None:
+                continue
+            dx, dy = scaled
             cv2.circle(img, (dx, dy), 3, color, -1)
 
     # Draw current ball detection
     if frame_idx < len(padded_positions):
         bx, by, bc = padded_positions[frame_idx]
         if bc >= args.confidence_threshold:
-            dx, dy = scale_xy(bx, by)
-            cv2.circle(img, (dx, dy), 10, (0, 255, 0), 3)
+            scaled = safe_scale_xy(bx, by)
+            if scaled is not None:
+                dx, dy = scaled
+                cv2.circle(img, (dx, dy), 10, (0, 255, 0), 3)
 
     # Draw reprojected 3D trajectory for active shots
     active_shot_indices = frame_to_shots.get(frame_idx, [])
@@ -728,7 +802,10 @@ for frame_idx in range(len(images)):
             continue
         color = SHOT_COLORS[shot_idx % len(SHOT_COLORS)]
         for pt in result["trajectory_2d_reprojected"]:
-            dx, dy = scale_xy(pt[0], pt[1])
+            scaled = safe_scale_xy(pt[0], pt[1])
+            if scaled is None:
+                continue
+            dx, dy = scaled
             cv2.circle(img, (dx, dy), 5, color, -1)
 
     # Info overlay
