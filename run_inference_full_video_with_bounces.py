@@ -165,9 +165,9 @@ def draw_bounce_map(bounces, out_path):
     ax.plot([0, 0], [-half_wid, half_wid], linestyle="--", color="gray", linewidth=1.5)
 
     if bounces:
-        color_map = plt.cm.get_cmap("tab20", max(1, len(bounces)))
+        color_map = plt.get_cmap("tab20")
         for i, bounce in enumerate(bounces):
-            color = color_map(i)
+            color = color_map(i % color_map.N)
             ax.scatter(
                 bounce["x"],
                 bounce["y"],
